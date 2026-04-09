@@ -1,0 +1,10 @@
+Pandas EDA summary
+Rows: 45000
+Columns: 14
+
+Top missing columns (count):
+- person_age: 4500
+- person_gender: 4500
+- person_education: 4500
+- person_income: 4500
+- person_emp_exp: 4500
