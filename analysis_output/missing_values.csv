@@ -1,0 +1,15 @@
+,missing_count,missing_percent
+person_age,4500,10.0
+person_gender,4500,10.0
+person_education,4500,10.0
+person_income,4500,10.0
+person_emp_exp,4500,10.0
+person_home_ownership,4500,10.0
+loan_amnt,4500,10.0
+loan_intent,4500,10.0
+loan_int_rate,4500,10.0
+loan_percent_income,4500,10.0
+cb_person_cred_hist_length,4500,10.0
+credit_score,4500,10.0
+previous_loan_defaults_on_file,4500,10.0
+loan_status,0,0.0
