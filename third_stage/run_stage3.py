@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shap
 import json
 import os
 import sys
@@ -20,10 +21,12 @@ import numpy as np
 import optuna
 import pandas as pd
 import seaborn as sns
-from flaml import AutoML
+from flaml.automl.automl import AutoML
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_val_score
+from sklearn_genetic import GASearchCV
+from sklearn_genetic.space import Continuous, Integer
 from xgboost import DMatrix, XGBClassifier
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--automl-time-budget", type=int, default=180, help="FLAML time budget in seconds.")
     parser.add_argument("--skip-grid", action="store_true", help="Skip Grid Search.")
     parser.add_argument("--skip-optuna", action="store_true", help="Skip Optuna.")
+    parser.add_argument("--skip-genetic", action="store_true", help="Skip genetic hyperparameter optimization.")
     parser.add_argument("--skip-automl", action="store_true", help="Skip FLAML AutoML.")
     parser.add_argument("--quick", action="store_true", help="Use a smaller tuning budget for smoke tests.")
     return parser.parse_args()
@@ -286,6 +290,61 @@ def run_grid_search(X: pd.DataFrame, y: pd.Series, X_test: pd.DataFrame, y_test:
         {**BASELINE_PARAMS, **search.best_params_},
     )
 
+def run_genetic_search(
+    X,
+    y,
+    X_test,
+    y_test,
+    cv,
+):
+    param_grid = {
+        "n_estimators": Integer(200, 700),
+        "max_depth": Integer(2, 8),
+        "learning_rate": Continuous(0.01, 0.2),
+        "subsample": Continuous(0.7, 1.0),
+        "colsample_bytree": Continuous(0.7, 1.0),
+        "min_child_weight": Integer(1, 10),
+    }
+
+    estimator = make_xgb(n_jobs=1)
+
+    search = GASearchCV(
+        estimator=estimator,
+        cv=cv,
+        scoring="f1",
+        population_size=20,
+        generations=15,
+        crossover_probability=0.8,
+        mutation_probability=0.1,
+        param_grid=param_grid,
+        n_jobs=-1,
+        verbose=True,
+    )
+
+    start = time.perf_counter()
+    search.fit(X, y)
+    train_time = time.perf_counter() - start
+
+    pd.DataFrame(search.cv_results_).to_csv(
+        OUTPUT_DIR / "genetic_search_results.csv",
+        index=False,
+    )
+
+    joblib.dump(
+        search.best_estimator_,
+        MODEL_DIR / "xgboost_genetic.joblib",
+    )
+
+    return evaluate_model(
+        "xgboost_genetic",
+        search.best_estimator_,
+        X_test,
+        y_test,
+        X.shape[1],
+        train_time,
+        {**BASELINE_PARAMS, **search.best_params_},
+    )
+
 
 def run_optuna(
     X: pd.DataFrame,
@@ -480,6 +539,92 @@ def write_report_notes(results: pd.DataFrame, high_corr_pairs: pd.DataFrame, sel
         "- `*_local_xgb_contributions.csv` - lokalne wyjasnienia predykcji XGBoost.",
     ]
     (OUTPUT_DIR / "report_notes.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    
+def save_shap_artifacts(
+    model,
+    X,
+    prefix,
+):
+    sample = X.sample(
+        min(1000, len(X)),
+        random_state=42,
+    )
+
+    explainer = shap.TreeExplainer(model)
+
+    shap_values = explainer.shap_values(sample)
+
+    plt.figure()
+    shap.summary_plot(
+        shap_values,
+        sample,
+        show=False,
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        OUTPUT_DIR / f"{prefix}_shap_summary.png",
+        dpi=200,
+        bbox_inches="tight",
+    )
+
+    plt.close()
+
+    plt.figure()
+
+    shap.summary_plot(
+        shap_values,
+        sample,
+        plot_type="bar",
+        show=False,
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        OUTPUT_DIR / f"{prefix}_shap_bar.png",
+        dpi=200,
+        bbox_inches="tight",
+    )
+
+    plt.close()
+
+def create_report_table(results):
+    report = results[
+        [
+            "model",
+            "accuracy",
+            "precision",
+            "recall",
+            "f1",
+            "roc_auc",
+            "pr_auc",
+            "feature_count",
+            "train_time_sec",
+        ]
+    ].copy()
+
+    report = report.rename(
+        columns={
+            "model": "Model",
+            "accuracy": "Accuracy",
+            "precision": "Precision",
+            "recall": "Recall",
+            "f1": "F1",
+            "roc_auc": "ROC-AUC",
+            "pr_auc": "PR-AUC",
+            "feature_count": "Features",
+            "train_time_sec": "Time[s]",
+        }
+    )
+
+    report.to_csv(
+        OUTPUT_DIR / "final_comparison_table.csv",
+        index=False,
+    )
+
+    return report
 
 
 def main() -> None:
@@ -538,6 +683,8 @@ def main() -> None:
         all_results.append(run_grid_search(X, y, X_test, y_test, cv, args.quick))
     if not args.skip_optuna:
         all_results.append(run_optuna(X, y, X_test, y_test, cv, args.optuna_trials, args.quick))
+    if not args.skip_genetic:
+        all_results.append(run_genetic_search(X, y, X_test, y_test, cv))
     if not args.skip_automl:
         all_results.append(run_flaml_automl(X, y, X_test, y_test, args.automl_time_budget, args.quick))
 
@@ -563,12 +710,20 @@ def main() -> None:
     results = results[metric_columns].sort_values("f1", ascending=False)
     results.to_csv(OUTPUT_DIR / "stage3_results.csv", index=False)
 
+    final_table = create_report_table(results)
+
+    final_table.to_csv(
+        OUTPUT_DIR / "final_comparison_table.csv",
+        index=False,
+    )
+
     best_xgb_name = results[results["model"].str.startswith("xgboost")].iloc[0]["model"]
     best_xgb = joblib.load(MODEL_DIR / f"{best_xgb_name}.joblib")
     best_feature_json = json.loads(results[results["model"] == best_xgb_name].iloc[0]["best_params"])
     best_features = best_feature_json.get("features") or best_feature_json.get("selected_features") or X.columns.tolist()
     save_feature_importance(best_xgb, best_features, best_xgb_name)
     save_local_explanations(best_xgb, X_test[best_features], y_test, best_xgb_name)
+    save_shap_artifacts(best_xgb,X_test[best_features],best_xgb_name,)
     write_report_notes(results, high_corr_pairs, select_k_results)
 
     print(results[["model", "f1", "precision", "recall", "roc_auc", "pr_auc", "feature_count"]].round(4).to_string(index=False))

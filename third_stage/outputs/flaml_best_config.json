@@ -1,0 +1,13 @@
+{
+  "best_config": {
+    "colsample_bytree": 0.8100441312705937,
+    "learning_rate": 0.11378754276893772,
+    "log_max_bin": 10,
+    "min_child_samples": 15,
+    "n_estimators": 742,
+    "num_leaves": 11,
+    "reg_alpha": 0.370200535868087,
+    "reg_lambda": 0.04970059636643281
+  },
+  "best_estimator": "lgbm"
+}
