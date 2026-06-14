@@ -509,37 +509,6 @@ def save_local_explanations(model: XGBClassifier, X_test: pd.DataFrame, y_test: 
             )
     pd.DataFrame(rows).to_csv(OUTPUT_DIR / f"{model_name}_local_xgb_contributions.csv", index=False)
 
-
-def write_report_notes(results: pd.DataFrame, high_corr_pairs: pd.DataFrame, select_k_results: pd.DataFrame) -> None:
-    best = results.sort_values("f1", ascending=False).iloc[0]
-    baseline = results[results["model"] == "xgboost_baseline"].iloc[0]
-    select_best = select_k_results.sort_values("cv_f1_mean", ascending=False).iloc[0]
-    lines = [
-        "# Etap 3 - notatki do raportu",
-        "",
-        "## Punkt odniesienia",
-        f"Baseline XGBoost z etapu 2 uzyskal na zbiorze testowym F1 = {baseline['f1']:.4f}, "
-        f"recall = {baseline['recall']:.4f}, precision = {baseline['precision']:.4f}.",
-        "",
-        "## Optymalizacja cech",
-        f"W macierzy korelacji znaleziono {len(high_corr_pairs)} par cech o |r| >= 0.8.",
-        f"Najlepszy wariant SelectKBest w CV wybral k = {int(select_best['k'])} "
-        f"z F1 CV = {select_best['cv_f1_mean']:.4f} +/- {select_best['cv_f1_std']:.4f}.",
-        "",
-        "## Najlepszy wariant",
-        f"Najwyzsze F1 na zbiorze testowym ma `{best['model']}`: F1 = {best['f1']:.4f}, "
-        f"recall = {best['recall']:.4f}, precision = {best['precision']:.4f}, "
-        f"ROC-AUC = {best['roc_auc']:.4f}, PR-AUC = {best['pr_auc']:.4f}.",
-        "",
-        "## Artefakty",
-        "- `stage3_results.csv` - tabela zbiorcza metryk.",
-        "- `correlation_heatmap.png` i `correlation_matrix.csv` - analiza korelacji.",
-        "- `select_k_best_cv_results.csv` - wyniki selekcji cech.",
-        "- `*_feature_importance.csv/png` - waznosc cech.",
-        "- `*_local_xgb_contributions.csv` - lokalne wyjasnienia predykcji XGBoost.",
-    ]
-    (OUTPUT_DIR / "report_notes.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    
 def save_shap_artifacts(
     model,
     X,
@@ -724,7 +693,6 @@ def main() -> None:
     save_feature_importance(best_xgb, best_features, best_xgb_name)
     save_local_explanations(best_xgb, X_test[best_features], y_test, best_xgb_name)
     save_shap_artifacts(best_xgb,X_test[best_features],best_xgb_name,)
-    write_report_notes(results, high_corr_pairs, select_k_results)
 
     print(results[["model", "f1", "precision", "recall", "roc_auc", "pr_auc", "feature_count"]].round(4).to_string(index=False))
     print(f"\nSaved outputs to: {OUTPUT_DIR}")
